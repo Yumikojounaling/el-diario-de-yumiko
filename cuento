@@ -1,0 +1,679 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  BookOpen, 
+  Sparkles, 
+  Palette, 
+  ChevronRight, 
+  ChevronLeft,
+  Loader2, 
+  Printer,
+  Moon,
+  Flower2,
+  RefreshCw,
+  Plus,
+  Check,
+  Settings2,
+  Image as ImageIcon,
+  Wand2,
+  Volume2,
+  BrainCircuit,
+  Lightbulb,
+  Upload,
+  X,
+  Layers,
+  Heart,
+  Search,
+  Wind,
+  Droplets,
+  Sun,
+  Award,
+  Zap,
+  Leaf,
+  MessageSquareHeart,
+  Sparkle
+} from 'lucide-react';
+
+const apiKey = ""; // El entorno proporciona la clave automáticamente
+
+const assetsOptions = [
+  { id: 'Sahumos', icon: '🔥' },
+  { id: 'Hierbas', icon: '🌿' },
+  { id: 'Esencias', icon: '💧' },
+  { id: 'Aromas', icon: '🌬️' },
+  { id: 'Atrapasueños', icon: '🕸️' },
+  { id: 'Colores', icon: '🎨' },
+  { id: 'Cristales', icon: '💎' },
+  { id: 'Mandalas', icon: '🌀' },
+  { id: 'Yoga', icon: '🧘' },
+  { id: 'Saludo al Sol', icon: '☀️' },
+  { id: 'Mercado', icon: '🛍️' },
+  { id: 'Cocinar', icon: '🍳' },
+  { id: 'Abuela', icon: '👵' },
+  { id: 'Magia', icon: '✨' }
+];
+
+const App = () => {
+  // --- Estados de Configuración ---
+  const [customTitle, setCustomTitle] = useState('Yumiko: El Reencuentro con mi Niña Interior');
+  // Súper prompt de ADN preconfigurado para consistencia absoluta de Yumiko sin subir fotos
+  const [dnaPrompt, setDnaPrompt] = useState(
+    'A young Japanese woman named Yumiko with large expressive brown eyes, neat straight bangs, and long brown hair styled in one or two long braids tied with a bright red ribbon bow. She is dressed in a cozy beige-cream knit sweater, styled with a green apron, beige pants, or green pants depending on the occasion. She is accompanied by her playful orange-and-white cat. 90s Studio Ghibli anime style, cinematic warm lighting, soft hand-painted watercolor textures, nostalgic lo-fi aesthetic'
+  );
+  const [targetAge, setTargetAge] = useState('Adultos');
+  const [referenceImages, setReferenceImages] = useState([]); 
+  const [selectedAssets, setSelectedAssets] = useState([
+    'Sahumos', 'Hierbas', 'Esencias', 'Atrapasueños', 'Cristales', 'Mandalas', 'Yoga', 'Saludo al Sol', 'Abuela'
+  ]);
+  
+  // --- Estados del Libro ---
+  const [bookPages, setBookPages] = useState([]); 
+  const [isGeneratingStructure, setIsGeneratingStructure] = useState(false);
+  const [isGeneratingBulk, setIsGeneratingBulk] = useState(false);
+  const [isGeneratingSingle, setIsGeneratingSingle] = useState(null); 
+  const [isNarrating, setIsNarrating] = useState(null);
+  const [isRefining, setIsRefining] = useState(null);
+  const [isGeneratingTitle, setIsGeneratingTitle] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [appStatus, setAppStatus] = useState('config'); 
+  const [showPrintInstructions, setShowPrintInstructions] = useState(false);
+
+  const audioRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Hashtags de Ghibli (para prompt interno únicamente, no se renderizan en el PDF)
+  const yumikoHashtags = "#ghibli #aesthetic #ghiblifood #foryou #parati";
+
+  const fetchWithRetry = async (url, options, retries = 5, backoff = 1000) => {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      if (retries > 0) {
+        await new Promise(r => setTimeout(r, backoff));
+        return fetchWithRetry(url, options, retries - 1, backoff * 2);
+      }
+      throw error;
+    }
+  };
+
+  const pcmToWav = (pcmData, sampleRate) => {
+    const buffer = new ArrayBuffer(44 + pcmData.length);
+    const view = new DataView(buffer);
+    const writeString = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + pcmData.length, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, pcmData.length, true);
+    for (let i = 0; i < pcmData.length; i++) view.setUint8(44 + i, pcmData[i]);
+    return new Blob([buffer], { type: 'audio/wav' });
+  };
+
+  const handleFileUpload = (e) => {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReferenceImages(prev => [...prev, reader.result]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  useEffect(() => {
+    if (selectedAssets.length > 0) {
+      const delayDebounceFn = setTimeout(() => {
+        generateTitleFromAssets();
+      }, 1000);
+      return () => clearTimeout(delayDebounceFn);
+    }
+  }, [selectedAssets]);
+
+  const generateTitleFromAssets = async () => {
+    setIsGeneratingTitle(true);
+    try {
+      const prompt = `Sugiere un título de sanación y autoayuda de estilo Ghibli de los 90 para adultos, basándote exactamente en estos activos sensoriales seleccionados: ${selectedAssets.join(', ')}. El cuento trata sobre el viaje de Yumiko sanando su niña interior. Devuelve únicamente el título, sin comillas, hashtags ni textos adicionales.`;
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const newTitle = res.candidates[0].content.parts[0].text.trim();
+      setCustomTitle(newTitle);
+    } catch (e) {
+      console.error("Error al generar título:", e);
+    } finally {
+      setIsGeneratingTitle(false);
+    }
+  };
+
+  const deepenReflection = async (index) => {
+    setIsRefining(index);
+    try {
+      const currentPage = bookPages[index];
+      const systemPrompt = "Eres un terapeuta transpersonal experto en psicología de sanación y autoayuda. Toma el texto actual y reescríbelo para que sea profundamente poético, motivacional y sanador de la niña interior, integrando con coherencia los activos seleccionados.";
+      const userQuery = `Refina este texto: "${currentPage.texto_base}". Activos: ${selectedAssets.join(', ')}. Devuelve únicamente el texto refinado.`;
+
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: userQuery }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] }
+        })
+      });
+
+      const newText = res.candidates[0].content.parts[0].text;
+      const updatedPages = [...bookPages];
+      updatedPages[index].texto_base = newText;
+      setBookPages(updatedPages);
+    } catch (e) { console.error(e); } 
+    finally { setIsRefining(null); }
+  };
+
+  const generateRitual = async (index) => {
+    setIsRefining(index);
+    try {
+      const currentPage = bookPages[index];
+      const prompt = `Basándote en el tema de sanación "${currentPage.titulo}" and los activos seleccionados: ${selectedAssets.join(', ')}, crea un ritual breve y estético de sanación emocional de 2 pasos. Devuelve un objeto JSON con un array de 2 strings llamado 'rituales'.`;
+
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      const data = JSON.parse(res.candidates[0].content.parts[0].text);
+      const updatedPages = [...bookPages];
+      updatedPages[index].rituales = data.rituales;
+      setBookPages(updatedPages);
+    } catch (e) { console.error(e); } 
+    finally { setIsRefining(null); }
+  };
+
+  const generateStructure = async () => {
+    setIsGeneratingStructure(true);
+    setErrorMessage('');
+    try {
+      const systemPrompt = `Eres un psicoterapeuta transpersonal, herborista y autor de libros de autoayuda ilustrados. 
+      Tu misión es estructurar un libro interactivo de sanación de la niña interior para adultos titulado "${customTitle}" de EXACTAMENTE 20 PÁGINAS.
+      
+      COHERENCIA ESTRICTA:
+      - El cuento debe ser una narrativa lineal y fluida que use única y lógicamente los activos elegidos por el usuario: ${selectedAssets.join(', ')}. No metas elementos aleatorios fuera de esta lista.
+      - Las páginas de colorear deben tener consignas adultas y psicológicas del color de forma súper coherente.
+
+      ESTRUCTURA EXACTA DE 20 PÁGINAS (Rigurosa):
+      - Página 1: PORTADA del libro. Arte a color de Yumiko reflexiva en su santuario acogedor, con el título destacado "${customTitle}".
+      - Páginas 2-11 (10 Páginas): HISTORIA CONTINUA DE SANACIÓN. Cada una con ilustración a color o de líneas e historia lineal que sana la niña interior.
+      - Páginas 12-19 (8 Páginas): ACTIVIDADES DE AUTOCUIDADO Y COLOREADO. Cada una contiene Line Art e integra consignas específicas como:
+        * "¿Qué colores elegirías para que Yumiko duerma en paz y calma?" (Psicología del color: ej. celeste para calmar tu mente).
+        * "¿Qué color elegirías para esta pluma de la intuición y por qué?"
+        * "¿Qué hierba o esencia le pondrías a este sahumo para limpiar tu energía hoy?"
+        * "Encuentra la amatista oculta en el jardín botánico y píntala de violeta transmutador."
+        Cada una de estas páginas de colorear debe incluir un bloque de exactamente 3 "ideas_lamparita" de autoayuda o consejos de pintura.
+      - Página 20: AFIRMACIÓN FINAL Y DIPLOMA DE BIENESTAR "Maestra del Alma".
+
+      FORMATO DE SALIDA: Devuelve obligatoriamente un array JSON de 20 objetos con la estructura:
+      {
+        "nro_pagina": número,
+        "tipo": "portada" | "historia" | "actividad" | "diploma",
+        "subtipo": "color" | "coloring",
+        "titulo": "Título profundo y sanador de la página",
+        "texto_base": "Texto continuo, poético y de autoayuda (no infantil)",
+        "prompt_visual": "Descripción detallada del arte (estilo Ghibli de los 90, lofi, acuarelas, sin texto)",
+        "consigna_educativa": "Consigna interactiva de sanación (solo para subtipo coloring/actividad)",
+        "ideas_lamparita": ["Idea 1", "Idea 2", "Idea 3"] (solo para subtipo coloring)
+      }`;
+
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Genera la estructura de sanación de 20 páginas basada en los activos: ${selectedAssets.join(', ')}.` }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      const data = JSON.parse(res.candidates[0].content.parts[0].text);
+      setBookPages(data.map(p => ({ ...p, image: null, rituales: [] })));
+      setAppStatus('editor');
+    } catch (e) {
+      setErrorMessage("Error de conexión al estructurar el libro. Reintenta: " + e.message);
+    } finally {
+      setIsGeneratingStructure(false);
+    }
+  };
+
+  const generatePageImage = async (index) => {
+    setIsGeneratingSingle(index);
+    try {
+      const page = bookPages[index];
+      // Utilizamos de forma primordial el dnaPrompt (ADN textual preconfigurado) para máxima consistencia sin subir fotos
+      let finalPrompt = `${dnaPrompt}. Scene: ${page.prompt_visual}. Featuring Yumiko as a young woman with neat straight bangs. No text, no symbols.`;
+      
+      if (page.subtipo === 'coloring' || page.tipo === 'actividad') {
+        finalPrompt = `Beautiful adult coloring book page, clean black ink outlines, white background, no grayscale, no shading, precise Ghibli botanical line art. Scene: featuring Yumiko with straight bangs. ${page.prompt_visual}. No text, no hashtags.`;
+      }
+
+      let base64 = "";
+      // Si el usuario subió fotos, las usamos como referencias secundarias de estilo
+      if (referenceImages.length > 0) {
+        const inlineDataParts = referenceImages.slice(0, 3).map(img => ({
+          inlineData: { mimeType: "image/png", data: img.split(',')[1] }
+        }));
+
+        const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: `Strictly maintain character consistency for Yumiko using these references alongside her textual DNA. Her hair, cozy clothing, and 90s Ghibli features must match exactly. Generate: ${finalPrompt}` },
+                ...inlineDataParts
+              ]
+            }],
+            generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+          })
+        });
+        const imgPart = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (imgPart) base64 = `data:image/png;base64,${imgPart.inlineData.data}`;
+      } else {
+        // Generador directo de Imagen 4.0 utilizando el ADN textual optimizado
+        const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instances: [{ prompt: finalPrompt }], parameters: { sampleCount: 1 } })
+        });
+        base64 = `data:image/png;base64,${res.predictions[0].bytesBase64Encoded}`;
+      }
+      
+      const newPages = [...bookPages];
+      newPages[index].image = base64;
+      setBookPages(newPages);
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    } finally {
+      setIsGeneratingSingle(null);
+    }
+  };
+
+  const generateBulkContent = async () => {
+    setIsGeneratingBulk(true);
+    for (let i = 0; i < bookPages.length; i++) {
+      if (!bookPages[i].image) {
+        await generatePageImage(i);
+        await new Promise(r => setTimeout(r, 600));
+      }
+    }
+    setIsGeneratingBulk(false);
+  };
+
+  const narrate = async (index) => {
+    if (isNarrating !== null) return;
+    setIsNarrating(index);
+    try {
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Lee con voz profunda, pausada y empática de meditación: ${bookPages[index].texto_base}` }] }],
+          generationConfig: { 
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } } 
+          }
+        })
+      });
+      const audioData = res.candidates[0].content.parts[0].inlineData;
+      const bytes = new Uint8Array(atob(audioData.data).split("").map(c => c.charCodeAt(0)));
+      if (audioRef.current) {
+        audioRef.current.src = URL.createObjectURL(pcmToWav(bytes, 24000));
+        audioRef.current.play();
+        audioRef.current.onended = () => setIsNarrating(null);
+      }
+    } catch (e) { setIsNarrating(null); }
+  };
+
+  const toggleAsset = (assetId) => {
+    setSelectedAssets(p => p.includes(assetId) ? p.filter(a => a !== assetId) : [...p, assetId]);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#faf8f6] text-[#3a3532] font-sans pb-24 selection:bg-indigo-50 relative">
+      <audio ref={audioRef} className="hidden" />
+      
+      {/* NAVBAR */}
+      <nav className="bg-white/95 backdrop-blur-md border-b border-stone-200 py-4 px-8 sticky top-0 z-50 flex justify-between items-center print:hidden shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="bg-stone-800 p-2 rounded-xl text-white">
+            <Leaf className="w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight">Yumiko Healing Studio Pro</h1>
+            <p className="text-[10px] text-stone-400 font-black uppercase tracking-widest italic">A4 Printable • 20 Páginas Espejo</p>
+          </div>
+        </div>
+        <div className="flex gap-4">
+          {appStatus === 'editor' && (
+            <button 
+              onClick={generateBulkContent}
+              disabled={isGeneratingBulk}
+              className="px-6 py-2 bg-indigo-500 text-white rounded-full font-bold flex items-center gap-2 hover:bg-indigo-600 transition-all disabled:opacity-50 shadow-md"
+            >
+              {isGeneratingBulk ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {isGeneratingBulk ? 'Generando Cuento...' : 'Ilustrar Libro Completo'}
+            </button>
+          )}
+          <button 
+            onClick={() => setShowPrintInstructions(true)} 
+            disabled={!bookPages.length} 
+            className="px-6 py-2 bg-stone-900 text-white rounded-full font-bold flex items-center gap-2 hover:bg-black transition-all shadow-md"
+          >
+            <Printer className="w-4 h-4" /> Bajar Libro (PDF)
+          </button>
+        </div>
+      </nav>
+
+      {/* GUÍA DE IMPRESIÓN/PDF MODAL */}
+      {showPrintInstructions && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 print:hidden animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2rem] max-w-lg w-full p-8 shadow-2xl border border-stone-100 space-y-6">
+            <div className="flex justify-between items-start">
+              <div className="bg-indigo-50 p-3 rounded-2xl text-indigo-600">
+                <Printer className="w-6 h-6" />
+              </div>
+              <button onClick={() => setShowPrintInstructions(false)} className="p-2 text-stone-400 hover:text-stone-950">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-2xl font-bold tracking-tight text-stone-900">Guía de descarga en PDF</h3>
+              <p className="text-sm text-stone-500 leading-relaxed">Sigue estos sencillos pasos en tu navegador para guardar el libro de Yumiko con la máxima calidad en formato A4:</p>
+            </div>
+            <div className="space-y-4 bg-stone-50 p-5 rounded-2xl text-xs font-semibold text-stone-600">
+              <div className="flex gap-3">
+                <span className="bg-indigo-100 text-indigo-700 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">1</span>
+                <p>Al hacer clic abajo se abrirá la ventana de impresión del sistema.</p>
+              </div>
+              <div className="flex gap-3">
+                <span className="bg-indigo-100 text-indigo-700 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">2</span>
+                <p>En el campo "Destino", selecciona <strong className="text-indigo-600">Guardar como PDF</strong>.</p>
+              </div>
+              <div className="flex gap-3">
+                <span className="bg-indigo-100 text-indigo-700 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">3</span>
+                <p>Asegúrate de marcar la casilla <strong className="text-indigo-600">Gráficos de fondo</strong> para imprimir todas las texturas y acuarelas.</p>
+              </div>
+              <div className="flex gap-3">
+                <span className="bg-indigo-100 text-indigo-700 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">4</span>
+                <p>Desmarca "Cabeceras y pies de página" del navegador para evitar bordes blancos con URLs.</p>
+              </div>
+            </div>
+            <button 
+              onClick={() => {
+                setShowPrintInstructions(false);
+                window.print();
+              }}
+              className="w-full py-4 bg-stone-900 text-white font-black rounded-2xl hover:bg-black transition-all shadow-lg"
+            >
+              Comenzar Descarga
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MAIN CONTAINER */}
+      <main className="max-w-7xl mx-auto px-6 py-10 grid lg:grid-cols-12 gap-8 print:block">
+        
+        {/* PANEL CONFIG */}
+        <aside className="lg:col-span-4 space-y-6 print:hidden">
+          <div className="bg-white p-7 rounded-[2.5rem] border border-stone-100 shadow-xl space-y-7 sticky top-24">
+            <h2 className="text-xs font-black text-stone-800 uppercase tracking-widest flex items-center gap-2">
+              <Settings2 className="w-4 h-4 text-indigo-400" /> Alquimia del Ebook
+            </h2>
+
+            {/* Módulo Multireferencia (Opcional) */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block">Fotos de Referencia</label>
+                <span className="text-[9px] bg-indigo-50 text-indigo-600 font-bold px-2 py-0.5 rounded-full uppercase">Opcional ✨</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {referenceImages.map((img, idx) => (
+                  <div key={idx} className="relative aspect-square rounded-xl overflow-hidden group border border-stone-100 shadow-sm">
+                    <img src={img} className="w-full h-full object-cover" alt="ref" />
+                    <button onClick={() => setReferenceImages(p => p.filter((_, i) => i !== idx))} className="absolute top-1 right-1 p-1 bg-white/90 rounded-full text-red-500 opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button>
+                  </div>
+                ))}
+                <button onClick={() => fileInputRef.current?.click()} className="aspect-square rounded-xl border-2 border-dashed border-stone-100 flex items-center justify-center text-stone-300 hover:text-indigo-400 bg-stone-50"><Plus className="w-6 h-6" /></button>
+              </div>
+              <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" multiple className="hidden" />
+              <p className="text-[9px] text-stone-400 leading-tight">La IA ya tiene el ADN visual de Yumiko incorporado. Sube fotos solo si quieres que se parezca a alguien específico.</p>
+            </div>
+
+            {/* Súper Prompt de ADN Visual */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block">ADN Visual de Yumiko (Texto)</label>
+              <textarea 
+                value={dnaPrompt} 
+                onChange={e => setDnaPrompt(e.target.value)} 
+                className="w-full bg-stone-50 p-3 rounded-xl border-none font-medium text-xs h-24 resize-none leading-relaxed focus:ring-2 focus:ring-indigo-100"
+                placeholder="Modifica el ADN físico o artístico de Yumiko..."
+              />
+            </div>
+
+            {/* Título de Sanación */}
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest">Título del Ebook</label>
+                {isGeneratingTitle ? (
+                  <span className="text-[10px] text-stone-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Pensando...</span>
+                ) : (
+                  <button 
+                    onClick={generateTitleFromAssets}
+                    className="text-[10px] font-bold text-orange-500 hover:underline flex items-center gap-1"
+                    title="Bautizar con IA según tus assets"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Auto-título ✨
+                  </button>
+                )}
+              </div>
+              <input value={customTitle} onChange={e => setCustomTitle(e.target.value)} className="w-full bg-stone-50 p-4 rounded-2xl border-none font-medium text-sm focus:ring-2 focus:ring-indigo-100" />
+            </div>
+
+            {/* Selector de Assets Coherentes */}
+            <div className="space-y-4">
+              <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block">Activos Coherentes del Cuento</label>
+              <div className="flex flex-wrap gap-2">
+                {assetsOptions.map(asset => (
+                  <button 
+                    key={asset.id} 
+                    onClick={() => toggleAsset(asset.id)} 
+                    className={`px-3 py-2 rounded-full text-[10px] font-bold border transition-all ${selectedAssets.includes(asset.id) ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm font-black' : 'bg-white border-stone-100 text-stone-300'}`}
+                  >
+                    {asset.icon} {asset.id}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[9px] text-stone-400 leading-tight italic">La IA creará una historia fluida utilizando solo y de forma protagonista estos activos.</p>
+            </div>
+
+            <button onClick={generateStructure} disabled={isGeneratingStructure} className="w-full py-5 bg-stone-900 text-white rounded-[1.5rem] font-black shadow-lg flex items-center justify-center gap-3 hover:bg-black transition-all">
+              {isGeneratingStructure ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+              DISEÑAR 20 PÁGINAS A4 ✨
+            </button>
+
+            {errorMessage && (
+              <div className="p-4 bg-red-50 rounded-2xl border border-red-100 text-red-600 text-xs flex gap-2 items-center">
+                <AlertCircle className="w-4 h-4" /> {errorMessage}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        {/* EDITOR / VISUALIZADOR */}
+        <section className="lg:col-span-8 space-y-10 print:col-span-12">
+          {!bookPages.length ? (
+            <div className="h-[70vh] flex flex-col items-center justify-center text-center space-y-6 bg-white rounded-[3.5rem] border border-stone-100 border-dashed">
+              <Heart className="w-12 h-12 text-stone-200" />
+              <p className="text-stone-400 text-sm max-w-xs leading-relaxed">Crea tu cuento de sanación profunda. El título y la historia se adaptarán automáticamente a los activos de herbolaria, abuela y magia que selecciones.</p>
+            </div>
+          ) : (
+            <div className="space-y-12">
+              {bookPages.map((page, index) => (
+                <div key={index} className="bg-white rounded-[3.5rem] border border-stone-100 shadow-sm overflow-hidden flex flex-col md:flex-row print:block print:h-screen print:m-0 print:border-none print:shadow-none group transition-all hover:shadow-2xl page-section relative">
+                  
+                  {/* Ilustración */}
+                  <div className="w-full md:w-1/2 aspect-[3/4] bg-stone-50 relative flex items-center justify-center print:h-[65%] print:w-full">
+                    {(isGeneratingSingle === index) ? (
+                      <Loader2 className="w-10 h-10 text-indigo-400 animate-spin" />
+                    ) : page.image ? (
+                      <img src={page.image} className="w-full h-full object-contain mix-blend-multiply" alt={page.titulo} />
+                    ) : (
+                      <button onClick={() => generatePageImage(index)} className="text-stone-200 hover:text-indigo-400 transition-transform">
+                        <Plus className="w-16 h-16" />
+                      </button>
+                    )}
+                    <div className="absolute top-6 left-6 px-4 py-1.5 rounded-full text-[10px] font-black text-white shadow-xl uppercase bg-stone-800 print:hidden">
+                       {page.nro_pagina === 1 ? 'Portada' : (page.subtipo === 'coloring' ? '🎨 Meditación' : '📖 Sanación')}
+                    </div>
+                  </div>
+
+                  {/* Texto */}
+                  <div className="flex-1 p-12 flex flex-col justify-center space-y-6 print:p-0 print:text-center print:mt-10 relative h-full">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Página {page.nro_pagina} de 20</span>
+                        <div className="flex gap-2 print:hidden">
+                          <button onClick={() => deepenReflection(index)} className="p-2 bg-indigo-50 text-indigo-500 rounded-full hover:bg-indigo-100 transition-all"><MessageSquareHeart className="w-4 h-4" /></button>
+                          <button onClick={() => generateRitual(index)} className="p-2 bg-amber-50 text-amber-500 rounded-full hover:bg-amber-100 transition-all"><Sparkle className="w-4 h-4" /></button>
+                        </div>
+                      </div>
+                      <h3 className={`font-serif font-black text-stone-800 leading-tight ${page.nro_pagina === 1 ? 'text-5xl mb-4 text-indigo-950' : 'text-3xl text-stone-800'}`}>{page.titulo}</h3>
+                    </div>
+                    
+                    <p className="text-stone-600 italic text-xl font-medium leading-relaxed">"{page.texto_base}"</p>
+                    
+                    {(page.subtipo === 'coloring' || page.tipo === 'actividad') && (
+                      <div className="space-y-5">
+                        <div className="bg-stone-50 p-6 rounded-[2rem] border border-stone-100 flex gap-4 items-center">
+                          <Heart className="w-5 h-5 text-red-300 flex-shrink-0" />
+                          <p className="text-[13px] font-bold text-stone-700 leading-snug">{page.consigna_educativa}</p>
+                        </div>
+
+                        {/* Ideas Lamparita */}
+                        <div className="bg-amber-50/20 p-6 rounded-3xl border border-amber-100/30">
+                          <div className="flex items-center gap-2 text-amber-600 font-black text-[10px] uppercase mb-3">
+                            <Lightbulb className="w-4 h-4" /> Sabiduría de la Lamparita
+                          </div>
+                          <ul className="space-y-1">
+                            {Array.isArray(page.ideas_lamparita) && page.ideas_lamparita.map((idea, i) => (
+                              <li key={i} className="text-[11px] font-medium text-stone-500 flex gap-2 leading-snug">
+                                <span className="text-amber-400">✨</span> {idea}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+
+                    {Array.isArray(page.rituales) && page.rituales.length > 0 && (
+                      <div className="bg-indigo-50/30 p-5 rounded-3xl border border-indigo-100/50 mt-4 animate-in slide-in-from-right duration-500">
+                        <h4 className="text-[10px] font-black text-indigo-500 uppercase mb-2 tracking-widest flex items-center gap-2">
+                          <BrainCircuit className="w-3 h-3" /> Ritual Sugerido ✨
+                        </h4>
+                        <div className="space-y-2 text-left">
+                          {page.rituales.map((rit, i) => <p key={i} className="text-[11px] font-bold text-indigo-800 leading-tight">• {rit}</p>)}
+                        </div>
+                      </div>
+                    )}
+
+                    {page.nro_pagina === 20 && (
+                      <div className="mt-4 border-4 border-double border-indigo-100 p-10 rounded-[3rem] text-center bg-indigo-50/10">
+                        <Award className="w-16 h-16 text-indigo-400 mx-auto mb-4" />
+                        <h4 className="font-black text-stone-800 uppercase text-xl tracking-widest">Viaje Yumiko🎀</h4>
+                        <div className="w-32 h-0.5 bg-indigo-100 mx-auto my-5"></div>
+                        <p className="text-[12px] text-stone-400 uppercase font-black">Sanación Completada</p>
+                      </div>
+                    )}
+
+                    {/* Footer Pie de Página */}
+                    <div className="mt-auto pt-10 text-center">
+                      <p className="text-[16px] font-black text-stone-300 uppercase tracking-[0.4em]">Yumiko🎀</p>
+                    </div>
+
+                    <div className="absolute bottom-12 right-12 print:hidden pt-4">
+                       <button onClick={() => narrate(index)} className={`p-3 rounded-full transition-all ${isNarrating === index ? 'bg-indigo-500 text-white shadow-lg animate-pulse' : 'bg-stone-50 text-stone-300 hover:text-indigo-500'}`}><Volume2 className="w-5 h-5" /></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
+
+      {/* FOOTER FLOTANTE */}
+      {bookPages.length > 0 && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-stone-900/95 backdrop-blur px-10 py-5 rounded-full flex items-center gap-12 shadow-2xl print:hidden z-[100] border border-white/10">
+          <div className="text-white text-[11px] font-black uppercase tracking-[0.1em]">
+            {bookPages.filter(p => p.image).length} / 20 PÁGINAS LISTAS
+          </div>
+          <button 
+            onClick={() => setShowPrintInstructions(true)} 
+            className="bg-white text-stone-900 px-10 py-3 rounded-full font-black text-[11px] hover:scale-105 transition-all uppercase shadow-xl"
+          >
+            DESCARGAR PDF A4 ✨
+          </button>
+        </div>
+      )}
+
+      <style>{`
+        @media print {
+          body { background: white !important; -webkit-print-color-adjust: exact; }
+          .print-hidden, nav, aside, button { display: none !important; }
+          main { display: block !important; width: 100% !important; padding: 0 !important; }
+          .grid { display: block !important; }
+          .bg-white { border: none !important; box-shadow: none !important; margin: 0 !important; }
+          .page-section { 
+            page-break-after: always; 
+            height: 100vh; 
+            display: flex !important; 
+            flex-direction: column !important; 
+            align-items: center !important; 
+            justify-content: center !important; 
+            padding: 1.5cm !important; 
+            position: relative;
+            box-sizing: border-box !important;
+          }
+          @page { 
+            size: A4; 
+            margin: 0; 
+          }
+          h3 { font-size: 3rem !important; }
+          p { font-size: 1.6rem !important; line-height: 1.4 !important; }
+          img { max-height: 52vh !important; width: auto !important; margin: 0 auto !important; display: block; }
+          .mt-auto { margin-top: auto !important; }
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default App;

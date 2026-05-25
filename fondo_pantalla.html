@@ -1,0 +1,635 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Sparkles, Download, RefreshCw, Smartphone, Heart, ShieldCheck, 
+  Info, Leaf, PenTool, ExternalLink, RotateCcw
+} from 'lucide-react';
+
+// --- CONFIGURACIÓN DE MODELOS ---
+const apiKey = ""; // La clave de API se inyecta automáticamente en tiempo de ejecución
+const IMAGE_MODEL = "imagen-4.0-generate-001";
+const TEXT_MODEL = "gemini-2.5-flash-preview-09-2025";
+
+// Imagen oficial de Yumiko descansando en un campo de amapolas (estilo años 90)
+const ORIGINAL_COVER = "http://googleusercontent.com/image_generation_content/4"; 
+
+// --- VARIACIONES DINÁMICAS (TABLE WEAVING) ---
+const PROMPT_ANGLES = [
+  "Wide shot showing a magical sky", 
+  "Medium shot focusing on the character", 
+  "P.O.V. cozy perspective", 
+  "Cinematic detailed close-up shot"
+];
+const PROMPT_LIGHTING = [
+  "Soft twilight glow illuminating the scene", 
+  "Dappled golden sunlight filtering through leaves", 
+  "Warm golden hour magic light", 
+  "Mystical glowing starlight and crescent moons"
+];
+const PROMPT_TEXTURES = [
+  "Soft watercolor textures", 
+  "90s anime film grain", 
+  "Detailed colored pencil shading", 
+  "Delicate ink outlines with hand-painted textures"
+];
+
+const DYNAMIC_THEMES = {
+  yumiko: {
+    base: "A vertical 9:16 Ghibli anime illustration of Yumiko. She has a long brown braid tied with a red bow ribbon, wearing a cozy warm cream sweater and olive green pants, standing in a serene meadow of red amapolas.",
+    actions: [
+      "lying smiling on the grass looking up at fluffy clouds.",
+      "walking slowly, letting her hand gently brush against the poppy petals.",
+      "sitting meditatively with her eyes closed, breathing in the scent of wildflowers.",
+      "holding a single red flower while butterflies flutter around her."
+    ],
+    details: ["Fluffy Ghibli clouds", "Nostalgic beautiful atmosphere"],
+    staticArt: ORIGINAL_COVER,
+    artCaption: "Yumiko en el campo de Amapolas (Ilustración Oficial)"
+  },
+  mandalas: {
+    base: "A vertical 9:16 high-contrast cozy vintage cottagecore illustration of a hand-drawn mandala on aged parchment paper.",
+    actions: [
+      "Surrounded by delicate sprigs of lavender, crystals, and tiny stars.",
+      "Surrounded by crescent moons, glowing magical particles, and dreamcatchers.",
+      "Beautifully symmetrical celestial pattern with soft gold ink touches."
+    ],
+    staticArt: "https://images.unsplash.com/photo-1544816155-12df9643f363?auto=format&fit=crop&w=600&q=80",
+    artCaption: "Mandala celestial bosquejado sobre pergamino vintage"
+  },
+  botica: {
+    base: "A vertical 9:16 nostalgic 90s anime style digital painting of Yumiko's cottage herbal apothecary. Yumiko has a long brown braid tied with a red bow ribbon, and wears a cozy cream-colored sweater and cream pants.",
+    actions: [
+      "Yumiko blending calming wild herbs with a stone mortar and pestle.",
+      "Yumiko organizing vintage glass jars of dried lavender, mint, and glowing raw crystals.",
+      "An open ancient book on a rustic wooden table under a stained-glass window.",
+      "Yumiko tying dried herbal bundles of lavender and roses near a warm fireplace."
+    ],
+    staticArt: "https://images.unsplash.com/photo-1515377905703-c4788e51af15?auto=format&fit=crop&w=600&q=80",
+    artCaption: "La Botica de Yumiko: Herbolario de Calma en Acuarela"
+  },
+  gato: {
+    base: "A warm Ghibli-inspired aesthetic vertical illustration inside a cottage cabin focusing on Yumiko and her cat Milo. Yumiko has a long brown braid tied with a red bow ribbon, and wears a cozy warm cream sweater and olive green pants.",
+    actions: [
+      "Yumiko reading an old diary on a terracotta floor cushion, Milo curled up asleep next to her.",
+      "Milo playing with the red ribbon at the end of Yumiko's long braid by a roaring fireplace.",
+      "Yumiko holding Milo in her arms looking out a rain-streaked window at glowing fireflies.",
+      "Yumiko drinking warm tea while Milo sleeps soundly on a plush olive-green cushion."
+    ],
+    staticArt: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&w=600&q=80",
+    artCaption: "Milo el gatito sabio durmiendo plácidamente"
+  }
+};
+
+const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+const buildDynamicPrompt = (themeId, userFeeling) => {
+  const theme = DYNAMIC_THEMES[themeId];
+  const angle = getRandom(PROMPT_ANGLES);
+  const lighting = getRandom(PROMPT_LIGHTING);
+  const action = getRandom(theme.actions);
+  const texture = getRandom(PROMPT_TEXTURES);
+  
+  let prompt = `${theme.base} ${angle}, ${action} ${lighting}. `;
+  
+  if (userFeeling.trim()) {
+    prompt += `The atmosphere deeply reflects the feeling and essence of: "${userFeeling}". `;
+  }
+  
+  prompt += `Nostalgic Ghibli anime style, 1990s retro aesthetic, strictly 2D illustration, beautiful color palette, ${texture}.`;
+  
+  return prompt;
+};
+
+export default function App() {
+  const [selectedTheme, setSelectedTheme] = useState('yumiko');
+  const [userIntention, setUserIntention] = useState('');
+  const [generatedImageUrl, setGeneratedImageUrl] = useState(ORIGINAL_COVER);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
+  const [miloQuote, setMiloQuote] = useState("¡Miau! Presiona una atmósfera para empezar a tejer magia juntas.");
+  const [showPromptInfo, setShowPromptInfo] = useState(false);
+
+  // --- ESTADOS DE INTEGRACIÓN GEMINI LLM ---
+  const [miloAdvice, setMiloAdvice] = useState(null);
+  const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
+
+  useEffect(() => {
+    updateMiloSpeech(selectedTheme, userIntention);
+  }, [selectedTheme, userIntention]);
+
+  useEffect(() => {
+    if (generatedImageUrl !== ORIGINAL_COVER) {
+      setGeneratedImageUrl(null);
+    }
+  }, [selectedTheme]);
+
+  const updateMiloSpeech = (themeId, text) => {
+    const lowercaseText = text.toLowerCase();
+    
+    if (lowercaseText.includes('triste') || lowercaseText.includes('sola') || lowercaseText.includes('cansada') || lowercaseText.includes('miedo') || lowercaseText.includes('ansia') || lowercaseText.includes('tristeza')) {
+      setMiloQuote("Milo se acerca en silencio y apoya su cabecita en tu pierna... 'Miau... No tienes que poder con todo hoy. Está bien pausar y respirar.'");
+      return;
+    }
+    if (lowercaseText.includes('lavanda') || lowercaseText.includes('té') || lowercaseText.includes('hierba') || lowercaseText.includes('manzanilla') || lowercaseText.includes('romero') || lowercaseText.includes('menta')) {
+      setMiloQuote("Milo olfatea el aire con los ojitos entreabiertos... '¡Miau! Siento el aroma de tus plantas. Tu suéter crema huele a flores frescas.'");
+      return;
+    }
+    if (lowercaseText.includes('calma') || lowercaseText.includes('paz') || lowercaseText.includes('amor') || lowercaseText.includes('luz') || lowercaseText.includes('alegre') || lowercaseText.includes('feliz')) {
+      setMiloQuote("Milo empieza a ronronear despacito... '¡Miau! Qué bien te sienta ese suéter crema y esos pantalones cómodos. Irradias paz hoy.'");
+      return;
+    }
+
+    const standardMessages = {
+      yumiko: "Milo camina entre las amapolas... '¡Miau! El viento de hoy balancea tu trenza y tu moño rojo. ¿Nos quedamos un ratito bajo el sol?'",
+      mandalas: "Milo mira de reojo tus diseños... '¡Miau! Pintar círculos sagrados ordena todos tus pensamientos despeinados.'",
+      botica: "Milo bosteza cerca de la estantería... 'Miau... Con tu suéter crema de lana estás súper calientita hoy. Yumiko, ¿hacemos infusión?'",
+      gato: "Milo se acurruca ronroneando con fuerza... '¡Miau! Me encanta amasar tus pantalones de color verde olivo. Eres súper cómoda hoy.'"
+    };
+
+    setMiloQuote(standardMessages[themeId] || "Milo te mira con ojos dulces... '¡Miau! Volvamos juntas a soñar.'");
+  };
+
+  const showToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+  };
+
+  // --- FETCH CON RETRY EXPONENCIAL ---
+  const fetchWithRetry = async (url, options, retries = 5, delay = 1000) => {
+    try {
+      const response = await fetch(url, options);
+      if (response.status === 429 && retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchWithRetry(url, options, retries - 1, delay * 2);
+      }
+      return response;
+    } catch (error) {
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchWithRetry(url, options, retries - 1, delay * 2);
+      }
+      throw error;
+    }
+  };
+
+  // --- LLAMADA A GEMINI API LLM ---
+  const consultMiloAI = async () => {
+    if (!userIntention.trim()) {
+      showToast("Por favor, escribe primero cómo te sientes en el diario para que Milo pueda guiarte 🐾");
+      return;
+    }
+
+    setIsGeneratingAdvice(true);
+    setMiloAdvice(null);
+
+    const systemPrompt = `Eres Milo, el sabio gatito del Refugio de Yumiko en el bosque de los susurros. Hablas español de forma dulce, cariñosa, mística y acogedora. Siempre utilizas expresiones de gato como "¡Miau!" o ronroneos. Yumiko, tu humana favorita, viste un suéter crema de lana, pantalones verde olivo o crema, y tiene una trenza larga atada con un lazo con moño rojo.
+Analizarás el estado de ánimo actual del usuario y responderás con una estructura de objeto JSON que tenga exactamente estas dos propiedades:
+1. "consejo": un mensaje muy cariñoso y de soporte que alivie su corazón y la haga sentir acompañada y en paz (máximo 3 líneas).
+2. "ritual": una pequeña acción física y sensorial que el usuario pueda hacer ahora mismo en casa (ej: sentir la taza caliente de té, cerrar los ojos 30 segundos, respirar hondo el aroma del café).
+
+Responde ÚNICAMENTE con el objeto JSON para poder parsearlo directamente.`;
+
+    const userQuery = `Me siento así hoy: "${userIntention}". Por favor Milo, escúchame y guíame con tu sabiduría gatuna.`;
+
+    try {
+      const response = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: userQuery }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "OBJECT",
+                properties: {
+                  consejo: { type: "STRING" },
+                  ritual: { type: "STRING" }
+                },
+                required: ["consejo", "ritual"]
+              }
+            }
+          })
+        }
+      );
+
+      const result = await response.json();
+      const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (text) {
+        const parsed = JSON.parse(text);
+        setMiloAdvice(parsed);
+        setMiloQuote(`¡Miau! He susurrado un consejo a tu diario. Míralo abajo.`);
+        showToast("✨ Milo ha respondido a tu sentir con un ritual místico.");
+      } else {
+        throw new Error("Respuesta de Gemini vacía");
+      }
+    } catch (error) {
+      console.error(error);
+      // Fallback amigable si falla la API
+      setMiloAdvice({
+        consejo: "¡Miau! Siento que tu energía está un poco cansada hoy. Recuerda que no pasa nada por no poder con todo, las amapolas también se cierran por la noche para florecer más fuertes.",
+        ritual: "Sostén tus manos juntas, respira hondo contando hasta cuatro y imagina el aroma fresco de la lavanda rodeándote."
+      });
+    } finally {
+      setIsGeneratingAdvice(false);
+    }
+  };
+
+  // --- GENERACIÓN DE WALLPAPER ---
+  const generateWallpaper = async () => {
+    setIsGeneratingImage(true);
+    setGeneratedImageUrl(null);
+
+    const promptText = buildDynamicPrompt(selectedTheme, userIntention);
+    console.log("Weaving prompt místico:", promptText);
+
+    try {
+      const response = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:predict?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instances: { prompt: promptText },
+            parameters: { sampleCount: 1 }
+          })
+        }
+      );
+
+      const result = await response.json();
+      if (result.predictions?.[0]?.bytesBase64Encoded) {
+        setGeneratedImageUrl(`data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`);
+        showToast("¡Tu página del día ha sido ilustrada! Teje tu calma hoy 🌸");
+      } else {
+        simulateImageGeneration();
+      }
+    } catch (error) {
+      console.error(error);
+      simulateImageGeneration();
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const simulateImageGeneration = () => {
+    const fallbacks = {
+      yumiko: ORIGINAL_COVER,
+      mandalas: "https://images.unsplash.com/photo-1544816155-12df9643f363?auto=format&fit=crop&w=600&q=80",
+      botica: "https://images.unsplash.com/photo-1515377905703-c4788e51af15?auto=format&fit=crop&w=600&q=80",
+      gato: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&w=600&q=80"
+    };
+    
+    setTimeout(() => {
+      setGeneratedImageUrl(fallbacks[selectedTheme]);
+      showToast("¡Atmósfera de calma cargada con éxito!");
+    }, 2000);
+  };
+
+  const resetToCover = () => {
+    setGeneratedImageUrl(ORIGINAL_COVER);
+    setSelectedTheme('yumiko');
+    setUserIntention('');
+    setMiloAdvice(null);
+    showToast("Volviste a la hermosa portada original de Yumiko 🎀");
+  };
+
+  const handleDownload = () => {
+    const activeImage = generatedImageUrl || DYNAMIC_THEMES[selectedTheme].staticArt;
+    
+    if (activeImage === ORIGINAL_COVER) {
+      showToast("Descargando la portada mística de Yumiko...");
+    }
+    const link = document.createElement('a');
+    link.href = activeImage;
+    link.download = `yumiko_pagina_ritual_${selectedTheme}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast("¡Tu descarga de wallpaper ha comenzado! 🌸");
+  };
+
+  const handleOpenInNewTab = () => {
+    const activeImage = generatedImageUrl || DYNAMIC_THEMES[selectedTheme].staticArt;
+
+    const newTab = window.open();
+    if (newTab) {
+      newTab.document.write(`
+        <html>
+          <head><title>Página de Calma - Yumiko</title></head>
+          <body style="margin:0; background:#FAF6EE; display:flex; justify-content:center; align-items:center; min-height:100vh;">
+            <img src="${activeImage}" style="max-width:100%; max-height:100vh; object-fit:contain; box-shadow:0 10px 30px rgba(0,0,0,0.1); border-radius:12px;" />
+          </body>
+        </html>
+      `);
+      newTab.document.close();
+    } else {
+      showToast("Por favor, permite las ventanas emergentes en tu navegador.");
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#FAF6EE] text-[#2B3E31] font-sans antialiased flex flex-col selection:bg-rose-100 selection:text-rose-950 relative">
+      
+      {/* TOAST DE NOTIFICACIÓN COZY */}
+      {toastMessage && (
+        <div className="fixed top-6 right-6 z-50 bg-[#2B3E31] text-[#FAF6EE] px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 border border-[#E1D6C1]/20 animate-fade-in max-w-sm">
+          <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+          <span className="text-xs font-serif leading-relaxed">{toastMessage}</span>
+        </div>
+      )}
+
+      {/* HEADER COZY */}
+      <header className="bg-[#FAF6EE] border-b border-[#E1D6C1] px-6 py-5 flex flex-col sm:flex-row justify-between items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-[#35523E] flex items-center justify-center shadow-inner animate-pulse cursor-pointer" onClick={resetToCover}>
+            <span className="text-xl">🎀</span>
+          </div>
+          <div>
+            <h1 className="text-2xl font-serif font-bold tracking-tight text-[#2B3E31] flex items-center gap-1.5">
+              El Refugio de Yumiko
+            </h1>
+            <p className="text-xs text-stone-500 font-serif italic">"Tus cicatrices son hilos de oro que cuentan tu historia."</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setShowPromptInfo(!showPromptInfo)}
+            className="text-xs font-serif text-stone-600 px-3 py-1.5 bg-[#FAF7F2] hover:bg-[#F0EAE1] rounded-xl border border-[#E1D6C1] flex items-center gap-1 transition-all"
+          >
+            <Info className="w-3.5 h-3.5" /> Ver Guía de Estilo Ghibli
+          </button>
+          <div className="text-xs font-serif italic text-stone-500 px-3 py-1.5 bg-[#EFE9DB] rounded-xl border border-[#E1D6C1] flex items-center gap-1.5">
+            <Leaf className="w-3.5 h-3.5 text-emerald-700" /> Página del Día de Yumiko
+          </div>
+        </div>
+      </header>
+
+      {/* MODAL DE PROMPT DE PORTADA */}
+      {showPromptInfo && (
+        <div className="fixed inset-0 bg-stone-950/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-lg border border-[#E1D6C1] shadow-2xl space-y-4 animate-scale-in">
+            <h4 className="font-serif font-bold text-lg text-[#2B3E31]">Estética y Concepto del Taller</h4>
+            <p className="text-xs text-stone-600 font-serif leading-relaxed italic bg-[#FAF7F2] p-4 rounded-2xl border border-[#E1D6C1]">
+              "Un rincón mágico inspirado en la acuarela de los 90. Yumiko, vistiendo siempre su suéter de lana color crema, pantalones verde olivo o crema, y luciendo su trenza larga atada al final con un lazo de moño rojo, comparte silencios con su sabio gatito Milo en el Bosque de los Susurros. Cada trazo busca despertar el asombro y cobijar a tu niña interior."
+            </p>
+            <div className="flex justify-end pt-2">
+              <button 
+                onClick={() => setShowPromptInfo(false)}
+                className="bg-[#35523E] hover:bg-[#2B3E31] text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+              >
+                Cerrar Refugio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VISOR PRINCIPAL */}
+      <main className="flex-1 p-4 md:p-8 flex items-center justify-center bg-stone-50/50">
+        <div className="bg-white rounded-3xl p-6 md:p-8 border border-[#E1D6C1] shadow-sm max-w-5xl w-full">
+          
+          <div className="border-b border-stone-100 pb-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h3 className="font-serif text-lg font-bold text-[#2B3E31] mb-1 flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-[#35523E] animate-pulse" />
+                La Página del Día de Yumiko
+              </h3>
+              <p className="text-xs text-stone-500">
+                Un pequeño ritual diario de calma para escribir, respirar y reconectar contigo 🌿.
+              </p>
+            </div>
+            
+            {generatedImageUrl === ORIGINAL_COVER && (
+              <span className="text-[10px] bg-[#EFE9DB] text-[#35523E] border border-[#E1D6C1] px-3 py-1 rounded-full font-serif font-semibold animate-bounce">
+                Ilustración de Portada Activa
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
+            
+            {/* HERRAMIENTAS DE EDICIÓN / INTENCIONES */}
+            <div className="md:col-span-6 space-y-6">
+              
+              {/* CAMPO DE INTENCIÓN / SENTIR DIARIO */}
+              <div className="bg-[#FAF7F2] p-5 rounded-2xl border border-[#E1D6C1]/60 space-y-3">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-[#35523E] uppercase tracking-wider flex items-center gap-1.5">
+                    <PenTool className="w-4 h-4 text-emerald-800" />
+                    ¿Cómo te sientes o qué energía buscas hoy?
+                  </label>
+                  <button
+                    onClick={consultMiloAI}
+                    disabled={isGeneratingAdvice}
+                    className="text-[10px] font-bold text-[#FAF6EE] bg-amber-600 hover:bg-amber-700 px-3 py-1.5 rounded-xl transition-all shadow-sm disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {isGeneratingAdvice ? (
+                      <>
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        Milo escucha...
+                      </>
+                    ) : (
+                      "✨ Preguntar a Milo"
+                    )}
+                  </button>
+                </div>
+                
+                <textarea
+                  value={userIntention}
+                  onChange={(e) => setUserIntention(e.target.value)}
+                  placeholder="Ej: Me siento cansada de la prisa del mundo, necesito el aroma relajante de la lavanda y un té calientito..."
+                  rows={3}
+                  className="w-full p-3 text-xs text-stone-700 bg-white border border-[#E1D6C1] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#35523E] placeholder:text-stone-400 font-serif leading-relaxed"
+                />
+                <p className="text-[10px] text-stone-400 italic">
+                  * Tu sentir tejerá los detalles de la ilustración respetando siempre el suéter crema, trenza larga y lazo rojo de Yumiko.
+                </p>
+              </div>
+
+              {/* INTEGRACIÓN GEMINI: CONSEJO DEL CORAZÓN DE MILO */}
+              {miloAdvice && (
+                <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-5 space-y-3.5 animate-scale-in">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🐱</span>
+                    <h4 className="text-xs font-bold tracking-wider text-amber-900 uppercase">
+                      El Susurro Místico de Milo
+                    </h4>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-stone-700 font-serif leading-relaxed italic bg-white/50 p-3 rounded-xl border border-amber-100/60">
+                      "{miloAdvice.consejo}"
+                    </p>
+                    <div className="bg-amber-100/30 p-3 rounded-xl border border-amber-200/40 text-[11px] text-stone-600">
+                      <span className="font-bold text-amber-800 uppercase block mb-1">Ritual recomendado:</span>
+                      {miloAdvice.ritual}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SELECCIÓN DE ATMÓSFERA */}
+              <div>
+                <span className="text-xs font-bold text-stone-400 tracking-wider uppercase block mb-3">Elige tu Portal de Calma</span>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { id: 'yumiko', title: "Yumiko", subtitle: "Atardecer carmesí de desconexión", icon: "🌸" },
+                    { id: 'mandalas', title: "Lienzo de Mandalas", subtitle: "Geometría sagrada mística", icon: "✨" },
+                    { id: 'botica', title: "La Botica de Noche", subtitle: "Estantes llenos de cristales", icon: "🔮" },
+                    { id: 'gato', title: "Calidez con Milo", subtitle: "Junto a la chimenea rústica", icon: "🐱" }
+                  ].map((theme) => (
+                    <button
+                      key={theme.id}
+                      onClick={() => setSelectedTheme(theme.id)}
+                      className={`p-3.5 rounded-2xl border text-left transition-all flex flex-col justify-between h-32 ${
+                        selectedTheme === theme.id 
+                          ? 'bg-[#35523E] border-transparent text-[#FAF6EE] shadow-md scale-[1.01]' 
+                          : 'bg-[#FAF7F2] border-[#E1D6C1] hover:bg-[#F0EAE1] text-[#2B3E31]'
+                      }`}
+                    >
+                      <span className="text-2xl mb-1">{theme.icon}</span>
+                      <div>
+                        <p className="text-xs font-bold leading-tight">{theme.title}</p>
+                        <p className={`text-[9px] mt-0.5 leading-snug ${selectedTheme === theme.id ? 'text-[#FAF6EE]/80' : 'text-stone-500'}`}>
+                          {theme.subtitle}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* LA BURBUJA INTERACTIVA DE MILO */}
+              <div className="bg-[#FAF6EE] border border-[#E1D6C1] rounded-2xl p-4 flex gap-3.5 items-start">
+                <div className="flex-shrink-0 flex flex-col items-center">
+                  <div className="w-12 h-12 bg-white rounded-full border border-[#E1D6C1] flex items-center justify-center text-2xl shadow-sm">
+                    🐱
+                  </div>
+                  <span className="text-[9px] font-bold text-stone-400 mt-1">MILO</span>
+                </div>
+                <div className="relative bg-white p-3 rounded-2xl border border-[#E1D6C1] flex-1">
+                  <div className="absolute top-4 -left-2 w-3.5 h-3.5 bg-white border-l border-b border-[#E1D6C1] transform rotate-45" />
+                  <p className="text-xs text-stone-600 font-serif leading-relaxed italic">
+                    {miloQuote}
+                  </p>
+                </div>
+              </div>
+
+              {/* BOTÓN MÁGICO DE GENERACIÓN */}
+              <div className="pt-2">
+                <button
+                  onClick={generateWallpaper}
+                  disabled={isGeneratingImage}
+                  className="w-full bg-[#35523E] hover:bg-[#2B3E31] text-[#FAF6EE] py-4 px-6 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg disabled:opacity-50"
+                >
+                  {isGeneratingImage ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Preparando tu pequeña hoja de calma...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                      Tejer mi Ritual del Día (9:16)
+                    </>
+                  )}
+                </button>
+              </div>
+
+            </div>
+
+            {/* PREVISUALIZACIÓN DE CELULAR FÍSICO */}
+            <div className="md:col-span-6 flex flex-col items-center">
+              
+              {/* Celular Maqueta */}
+              <div className="w-[240px] h-[460px] rounded-[38px] bg-stone-900 border-[7px] border-stone-800 shadow-xl overflow-hidden relative flex flex-col justify-between">
+                
+                {/* Altavoz y Cámara frontal simulada */}
+                <div className="w-16 h-4 bg-stone-800 rounded-b-xl absolute top-0 left-1/2 transform -translate-x-1/2 z-20 flex items-center justify-center">
+                  <div className="w-2 h-2 rounded-full bg-stone-900" />
+                </div>
+
+                {/* Pantalla de Bloqueo */}
+                <div className="w-full h-full relative bg-[#FAF6EE] flex items-center justify-center overflow-hidden">
+                  {isGeneratingImage ? (
+                    <div className="flex flex-col items-center gap-3 text-stone-400 p-4 text-center">
+                      <RefreshCw className="w-8 h-8 animate-spin text-[#35523E]" />
+                      <p className="text-[11px] font-sans text-stone-500">Uniendo hilos de acuarela...</p>
+                    </div>
+                  ) : (
+                    <div className="w-full h-full relative">
+                      <img 
+                        src={generatedImageUrl || DYNAMIC_THEMES[selectedTheme].staticArt} 
+                        alt={DYNAMIC_THEMES[selectedTheme].artCaption} 
+                        className="w-full h-full object-cover select-none pointer-events-auto transition-all duration-300"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = ORIGINAL_COVER;
+                        }}
+                      />
+                      {!generatedImageUrl && (
+                        <div className="absolute bottom-16 left-2 right-2 bg-white/70 backdrop-blur-xs p-1.5 rounded-lg text-center text-[8px] font-serif text-[#2B3E31] select-none pointer-events-none">
+                          {DYNAMIC_THEMES[selectedTheme].artCaption}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Capas decorativas del visor superior */}
+                  <div className="absolute top-12 w-full text-center text-stone-800/80 drop-shadow-sm font-sans z-10 select-none pointer-events-none">
+                    <p className="text-[10px] font-semibold tracking-wide uppercase">Diario de Yumiko</p>
+                    <p className="text-3xl font-light mt-0.5">20:26</p>
+                  </div>
+                  
+                  <div className="absolute bottom-6 w-full text-center text-stone-800/60 text-[9px] tracking-widest drop-shadow-sm z-10 select-none pointer-events-none uppercase">
+                    Desliza para entrar
+                  </div>
+
+                </div>
+
+              </div>
+
+              {/* ACCIONES DEL FONDO */}
+              <div className="mt-4 flex flex-wrap gap-2 justify-center w-full max-w-[260px]">
+                <button
+                  onClick={handleDownload}
+                  className="flex-1 bg-white hover:bg-stone-100 text-stone-700 px-3 py-2 rounded-xl border border-[#E1D6C1] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                  title="Descargar imagen actual"
+                >
+                  <Download className="w-3.5 h-3.5" /> Descargar
+                </button>
+                <button
+                  onClick={handleOpenInNewTab}
+                  className="flex-1 bg-white hover:bg-stone-100 text-stone-700 px-3 py-2 rounded-xl border border-[#E1D6C1] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                  title="Ver en pantalla completa"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Expandir
+                </button>
+                
+                {generatedImageUrl !== ORIGINAL_COVER && (
+                  <button
+                    onClick={resetToCover}
+                    className="w-full bg-[#EFE9DB]/60 hover:bg-[#EFE9DB] text-[#2B3E31] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Volver a Portada Ghibli original
+                  </button>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+      </main>
+
+      {/* FOOTER COZY */}
+      <footer className="bg-[#FAF6EE] border-t border-[#E1D6C1] py-6 text-center text-xs text-stone-500 font-serif italic">
+        "Encuentra abrigo en los pequeños detalles. Creado con amor en El Refugio de Yumiko."
+      </footer>
+    </div>
+  );
+}
